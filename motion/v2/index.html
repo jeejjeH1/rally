@@ -759,9 +759,6 @@ function HUD(t) {
   const a = prog(t, .8, 1.4) * (1 - prog(t, 34.0, 34.6));
   if (a <= 0) return;
   ctx.save(); ctx.globalAlpha = a * .9;
-  const m = 44, l = 46;
-  ctx.strokeStyle = 'rgba(255,135,255,.75)'; ctx.lineWidth = 3;
-  [[m, m, 1, 1], [W - m, m, -1, 1], [m, H - m, 1, -1], [W - m, H - m, -1, -1]].forEach(([x, y, sx, sy]) => { ctx.beginPath(); ctx.moveTo(x, y + sy * l); ctx.lineTo(x, y); ctx.lineTo(x + sx * l, y); ctx.stroke(); });
   text('GENLAYER  ✕  RALLY', 92, 70, { size: 19, weight: 700, fam: F_MONO, ls: 5, align: 'left', color: 'rgba(255,230,255,.85)' });
   const blink = Math.floor(t * 2) % 2;
   ctx.fillStyle = blink ? C.pink : 'rgba(255,135,255,.3)'; ctx.beginPath(); ctx.arc(W - 92 - tw('LIVE CAMPAIGN', 19, 700, F_MONO, 5) - 24, 70, 7, 0, 6.2832); ctx.fill();

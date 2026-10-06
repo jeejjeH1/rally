@@ -62,6 +62,11 @@ if (mode === 'stills') {
   const final = path.join(OUT, 'genlayer-rally-v2-60fps.mp4');
   await run('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', path.join(OUT, 'list.txt'),
     ...(fs.existsSync(wav) ? ['-i', wav, '-c:a', 'aac', '-b:a', '256k', '-ar', '48000', '-shortest'] : []),
-    '-c:v', 'copy', '-movflags', '+faststart', final]);
+    '-c:v', 'copy', '-movflags', '+faststart', path.join(OUT, 'master.mp4')]);
+  // 2-pass to a fixed 18 Mbps: keeps the grain clean while staying under GitHub's 100 MB / X's 512 MB limits
+  const enc = ['-c:v', 'libx264', '-preset', 'slow', '-profile:v', 'high', '-level', '4.2', '-pix_fmt', 'yuv420p', '-r', String(FPS),
+    '-b:v', '18M', '-maxrate', '25M', '-bufsize', '36M', '-g', '120', '-passlogfile', path.join(OUT, 'p2')];
+  await run('ffmpeg', ['-y', '-loglevel', 'error', '-i', path.join(OUT, 'master.mp4'), ...enc, '-pass', '1', '-an', '-f', 'mp4', '/dev/null']);
+  await run('ffmpeg', ['-y', '-loglevel', 'error', '-i', path.join(OUT, 'master.mp4'), ...enc, '-pass', '2', '-c:a', 'copy', '-movflags', '+faststart', final]);
   console.log('done ->', final, ((Date.now() - started) / 1000).toFixed(0) + 's');
 }
