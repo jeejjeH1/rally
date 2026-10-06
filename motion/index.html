@@ -1,0 +1,567 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>GenLayer x Rally</title>
+<style>
+  html,body{margin:0;background:#07000f;overflow:hidden}
+  canvas{display:block;width:100vw;height:56.25vw;max-height:100vh;max-width:177.78vh;margin:auto}
+</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script>
+const W = 1920, H = 1080, DURATION = 25;
+const C = {
+  bg0: '#07000f', bg1: '#1a0033', pink: '#ff87ff', mag: '#dc00ff',
+  purple: '#7b2cff', deep: '#3a0a6b', white: '#ffffff'
+};
+const FONT = '"Inter", "Inter Display", system-ui, sans-serif';
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+// ---------- utils ----------
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const easeOutExpo = x => x >= 1 ? 1 : 1 - Math.pow(2, -10 * x);
+const easeInExpo = x => x <= 0 ? 0 : Math.pow(2, 10 * x - 10);
+const easeOutCubic = x => 1 - Math.pow(1 - x, 3);
+const easeInOutCubic = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const easeOutBack = x => { const c1 = 1.9, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const easeOutElastic = x => x === 0 ? 0 : x === 1 ? 1 : Math.pow(2, -10 * x) * Math.sin((x * 10 - .75) * (2 * Math.PI) / 3) + 1;
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const hash = n => { const x = Math.sin(n * 127.1) * 43758.5453; return x - Math.floor(x); };
+
+function grad(x0, y0, x1, y1, stops) {
+  const g = ctx.createLinearGradient(x0, y0, x1, y1);
+  stops.forEach(([o, c]) => g.addColorStop(o, c));
+  return g;
+}
+const brandGrad = (x0, x1) => grad(x0, 0, x1, 0, [[0, C.pink], [.55, C.mag], [1, C.purple]]);
+
+// ---------- assets ----------
+const imgs = {};
+function load(name, src) { return new Promise(r => { const i = new Image(); i.onload = () => { imgs[name] = i; r(); }; i.src = src; }); }
+function tinted(img, fill) {
+  const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+  const x = c.getContext('2d'); x.drawImage(img, 0, 0);
+  x.globalCompositeOperation = 'source-in';
+  if (typeof fill === 'function') x.fillStyle = fill(x, c); else x.fillStyle = fill;
+  x.fillRect(0, 0, c.width, c.height); return c;
+}
+
+// ---------- background ----------
+const R = rng(42);
+const particles = Array.from({ length: 160 }, () => ({
+  x: R() * W, y: R() * H, z: .2 + R() * .8, s: 1 + R() * 3, ph: R() * 6.28, c: R() < .5 ? C.pink : (R() < .5 ? C.mag : C.white)
+}));
+
+function background(t, energy) {
+  const g = ctx.createRadialGradient(W / 2, H * .45, 50, W / 2, H / 2, W * .75);
+  g.addColorStop(0, '#2a0050'); g.addColorStop(.45, '#12002a'); g.addColorStop(1, C.bg0);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+  // moving aurora blobs
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 3; i++) {
+    const bx = W / 2 + Math.sin(t * .35 + i * 2.1) * 620, by = H / 2 + Math.cos(t * .27 + i * 1.7) * 280;
+    const rg = ctx.createRadialGradient(bx, by, 0, bx, by, 620);
+    const col = [C.mag, C.purple, C.pink][i];
+    rg.addColorStop(0, col + '30'); rg.addColorStop(1, col + '00');
+    ctx.fillStyle = rg; ctx.fillRect(0, 0, W, H);
+  }
+  ctx.restore();
+
+  // synthwave grid floor
+  ctx.save();
+  const horizon = H * .62;
+  const fl = ctx.createLinearGradient(0, horizon, 0, H);
+  fl.addColorStop(0, 'rgba(220,0,255,0)'); fl.addColorStop(1, `rgba(220,0,255,${.10 + energy * .08})`);
+  ctx.fillStyle = fl; ctx.fillRect(0, horizon, W, H - horizon);
+  ctx.lineWidth = 2;
+  const speed = (t * (1.2 + energy)) % 1;
+  for (let i = 0; i < 18; i++) {
+    const z = (i + 1 - speed); const y = horizon + (H - horizon) * (1 / z) * .9;
+    if (y > H || y < horizon) continue;
+    const a = clamp((y - horizon) / (H - horizon)) * .55;
+    ctx.strokeStyle = `rgba(255,135,255,${a})`;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  for (let i = -24; i <= 24; i++) {
+    const xb = W / 2 + i * 150;
+    const a = .28 * (1 - Math.abs(i) / 26);
+    const lg = ctx.createLinearGradient(0, horizon, 0, H);
+    lg.addColorStop(0, 'rgba(220,0,255,0)'); lg.addColorStop(1, `rgba(220,0,255,${a})`);
+    ctx.strokeStyle = lg;
+    ctx.beginPath(); ctx.moveTo(W / 2 + i * 6, horizon); ctx.lineTo(xb * 1 + (xb - W / 2) * 2.2, H); ctx.stroke();
+  }
+  // horizon glow line
+  const hg = ctx.createLinearGradient(0, 0, W, 0);
+  hg.addColorStop(0, 'rgba(255,135,255,0)'); hg.addColorStop(.5, `rgba(255,135,255,${.7 + energy * .3})`); hg.addColorStop(1, 'rgba(255,135,255,0)');
+  ctx.fillStyle = hg; ctx.fillRect(0, horizon - 1, W, 2);
+  ctx.restore();
+
+  // particles
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (const p of particles) {
+    const x = (p.x + t * 40 * p.z * (1 + energy * 3)) % (W + 40) - 20;
+    const y = (p.y - t * 25 * p.z + H * 4) % H;
+    const a = (.35 + .4 * Math.sin(t * 2 + p.ph)) * p.z;
+    ctx.fillStyle = p.c; ctx.globalAlpha = clamp(a);
+    ctx.beginPath(); ctx.arc(x, y, p.s * p.z, 0, 6.283); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function vignette() {
+  const g = ctx.createRadialGradient(W / 2, H / 2, H * .35, W / 2, H / 2, W * .72);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(3,0,8,.85)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+function scanlines(t) {
+  ctx.save(); ctx.globalAlpha = .06; ctx.fillStyle = '#000';
+  for (let y = (t * 60) % 4; y < H; y += 4) ctx.fillRect(0, y, W, 1.5);
+  ctx.restore();
+}
+function hud(t) {
+  // corner brackets + live meta, gives a "broadcast" feel
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,135,255,.55)'; ctx.lineWidth = 3;
+  const m = 46, l = 54;
+  [[m, m, 1, 1], [W - m, m, -1, 1], [m, H - m, 1, -1], [W - m, H - m, -1, -1]].forEach(([x, y, sx, sy]) => {
+    ctx.beginPath(); ctx.moveTo(x, y + sy * l); ctx.lineTo(x, y); ctx.lineTo(x + sx * l, y); ctx.stroke();
+  });
+  ctx.font = `600 20px ${FONT}`; ctx.letterSpacing = '4px'; ctx.fillStyle = 'rgba(255,255,255,.55)';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText('GENLAYER × RALLY', m + 22, m + 22);
+  ctx.textAlign = 'right';
+  const tc = `00:${String(Math.floor(t)).padStart(2, '0')}:${String(Math.floor((t % 1) * 30)).padStart(2, '0')}`;
+  ctx.fillText(tc, W - m - 22, m + 22);
+  ctx.fillText('100,000 GLP', W - m - 22, H - m - 22);
+  ctx.textAlign = 'left';
+  const blink = Math.sin(t * 8) > 0;
+  ctx.fillStyle = blink ? C.pink : 'rgba(255,135,255,.3)';
+  ctx.beginPath(); ctx.arc(m + 30, H - m - 22, 7, 0, 6.283); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.55)'; ctx.fillText('LIVE CAMPAIGN', m + 48, H - m - 22);
+  ctx.restore();
+}
+
+// ---------- text helpers ----------
+function text(str, x, y, o = {}) {
+  const size = o.size || 80, weight = o.weight || 800;
+  ctx.save();
+  ctx.font = `${weight} ${size}px ${FONT}`;
+  ctx.letterSpacing = (o.ls || 0) + 'px';
+  ctx.textAlign = o.align || 'center'; ctx.textBaseline = o.base || 'middle';
+  ctx.globalAlpha *= o.alpha == null ? 1 : o.alpha;
+  if (o.glitch) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = 'rgba(255,0,200,.85)'; ctx.fillText(str, x - o.glitch, y);
+    ctx.fillStyle = 'rgba(80,120,255,.85)'; ctx.fillText(str, x + o.glitch, y + o.glitch * .3);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  if (o.glow) { ctx.shadowColor = o.glowColor || C.mag; ctx.shadowBlur = o.glow; }
+  let fill = o.color || C.white;
+  if (o.gradient) {
+    const w = ctx.measureText(str).width;
+    const x0 = o.align === 'left' ? x : o.align === 'right' ? x - w : x - w / 2;
+    fill = brandGrad(x0, x0 + w);
+  }
+  ctx.fillStyle = fill; ctx.fillText(str, x, y);
+  if (o.stroke) { ctx.shadowBlur = 0; ctx.lineWidth = o.stroke; ctx.strokeStyle = o.strokeColor || C.pink; ctx.strokeText(str, x, y); }
+  ctx.restore();
+}
+function measure(str, size, weight = 800, ls = 0) {
+  ctx.save(); ctx.font = `${weight} ${size}px ${FONT}`; ctx.letterSpacing = ls + 'px';
+  const w = ctx.measureText(str).width; ctx.restore(); return w;
+}
+// text revealed by a rising mask
+function maskText(str, x, y, p, o = {}) {
+  const size = o.size || 80;
+  ctx.save();
+  const w = measure(str, size, o.weight, o.ls) + 40;
+  const x0 = (o.align === 'left') ? x - 10 : (o.align === 'right') ? x - w + 10 : x - w / 2;
+  ctx.beginPath(); ctx.rect(x0 - 40, y - size * .75, w + 80, size * 1.5); ctx.clip();
+  const e = easeOutExpo(p);
+  text(str, x, y + (1 - e) * size * 1.3, o);
+  ctx.restore();
+}
+// per-letter cascade
+function letters(str, cx, y, t0, t, o = {}) {
+  const size = o.size || 100, ls = o.ls || 0, weight = o.weight || 900;
+  const total = measure(str, size, weight, ls);
+  let x = cx - total / 2;
+  ctx.save(); ctx.font = `${weight} ${size}px ${FONT}`; ctx.letterSpacing = ls + 'px';
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    const cw = ctx.measureText(ch).width;
+    const p = prog(t, t0 + i * (o.stagger || .04), t0 + i * (o.stagger || .04) + (o.dur || .5));
+    const e = easeOutBack(p);
+    if (p > 0) {
+      ctx.save();
+      ctx.translate(x + cw / 2, y + (1 - e) * 80);
+      ctx.scale(1, lerp(1.8, 1, clamp(e)));
+      ctx.globalAlpha = clamp(p * 3);
+      text(ch, 0, 0, { ...o, size, weight, ls: 0, align: 'center' });
+      ctx.restore();
+    }
+    x += cw;
+  }
+  ctx.restore();
+}
+
+function rays(cx, cy, t, alpha, n = 18, len = 1400) {
+  ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.translate(cx, cy); ctx.rotate(t * .25);
+  for (let i = 0; i < n; i++) {
+    ctx.rotate(6.283 / n);
+    const g = ctx.createLinearGradient(0, 0, len, 0);
+    g.addColorStop(0, `rgba(220,0,255,${.35 * alpha})`); g.addColorStop(1, 'rgba(220,0,255,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(len, -40 - (i % 3) * 25); ctx.lineTo(len, 40 + (i % 3) * 25); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+function shock(cx, cy, p, maxR = 900, width = 14, color = '255,135,255') {
+  if (p <= 0 || p >= 1) return;
+  const e = easeOutCubic(p);
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = `rgba(${color},${1 - p})`; ctx.lineWidth = width * (1 - p) + 1;
+  ctx.shadowColor = C.mag; ctx.shadowBlur = 30;
+  ctx.beginPath(); ctx.arc(cx, cy, e * maxR, 0, 6.283); ctx.stroke();
+  ctx.restore();
+}
+function flash(p, color = '255,255,255') {
+  if (p <= 0 || p >= 1) return;
+  ctx.save(); ctx.fillStyle = `rgba(${color},${Math.pow(1 - p, 2)})`; ctx.fillRect(0, 0, W, H); ctx.restore();
+}
+function burst(cx, cy, t, t0, seed, n = 70, spread = 900) {
+  const p = prog(t, t0, t0 + 1.6); if (p <= 0 || p >= 1) return;
+  const r = rng(seed);
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < n; i++) {
+    const a = r() * 6.283, sp = .3 + r() * .7, sz = 2 + r() * 6;
+    const d = easeOutExpo(p) * spread * sp;
+    const x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d + p * p * 120;
+    ctx.globalAlpha = 1 - p;
+    ctx.fillStyle = [C.pink, C.mag, C.white][i % 3];
+    ctx.save(); ctx.translate(x, y); ctx.rotate(a + p * 5);
+    ctx.fillRect(-sz, -sz * .35, sz * 2, sz * .7);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+function glassCard(x, y, w, h, alpha, highlight) {
+  ctx.save(); ctx.globalAlpha = alpha;
+  const r = 28;
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, r);
+  ctx.fillStyle = 'rgba(40,0,70,.55)'; ctx.fill();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = grad(x, y, x + w, y + h, [[0, C.pink], [.5, 'rgba(220,0,255,.4)'], [1, C.purple]]);
+  if (highlight > 0) { ctx.shadowColor = C.mag; ctx.shadowBlur = 50 * highlight; }
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ---------- scenes ----------
+const S = [
+  [0, 3.3, sceneIntro],
+  [3.3, 6.7, sceneLive],
+  [6.7, 10.8, scenePrize],
+  [10.8, 15.8, sceneSteps],
+  [15.8, 18.6, sceneNoFarm],
+  [18.6, 21.8, sceneCallout],
+  [21.8, 25, sceneOutro],
+];
+
+function sceneIntro(t) {
+  const cx = W / 2, cy = H * .42;
+  const pIn = prog(t, .1, .75);
+  rays(cx, cy, t, clamp(prog(t, .6, 1.2)) * (1 - prog(t, 2.8, 3.3)));
+  // ghost trail zoom
+  const logo = imgs.logoGrad, white = imgs.logoWhite;
+  const s = lerp(4.5, 1, easeInExpo(pIn)) * (1 + .03 * Math.sin(t * 3));
+  const size = 360 * s;
+  if (pIn > 0) {
+    ctx.save(); ctx.globalAlpha = clamp(pIn * 2);
+    ctx.shadowColor = C.mag; ctx.shadowBlur = 80;
+    ctx.drawImage(pIn < 1 ? white : logo, cx - size / 2, cy - size / 2, size, size);
+    ctx.restore();
+    if (pIn >= 1) {
+      // chromatic jitter
+      const j = Math.max(0, 1 - prog(t, .75, 1.3)) * 18;
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = .6;
+      ctx.drawImage(imgs.logoPink, cx - size / 2 - j, cy - size / 2, size, size);
+      ctx.drawImage(imgs.logoPurple, cx - size / 2 + j, cy - size / 2, size, size);
+      ctx.restore();
+    }
+  }
+  shock(cx, cy, prog(t, .75, 1.7), 1100, 26);
+  shock(cx, cy, prog(t, .9, 2.1), 800, 10, '220,0,255');
+  burst(cx, cy, t, .75, 7, 90, 1000);
+  letters('GENLAYER', cx, H * .76, 1.15, t, { size: 120, ls: 22, gradient: false, glow: 30, stagger: .05 });
+  maskText('IS LIVE ON RALLY', cx, H * .86, prog(t, 1.7, 2.4), { size: 34, weight: 600, ls: 14, color: C.pink });
+  flash(prog(t, .75, 1.15));
+}
+
+function sceneLive(t) {
+  const lt = t - 3.3;
+  // kinetic bands
+  ctx.save(); ctx.globalAlpha = .12;
+  for (let i = 0; i < 5; i++) {
+    const y = 140 + i * 200, off = ((lt * (300 + i * 80) * (i % 2 ? 1 : -1)) % 900);
+    ctx.font = `900 150px ${FONT}`; ctx.letterSpacing = '10px'; ctx.textBaseline = 'middle';
+    ctx.strokeStyle = C.pink; ctx.lineWidth = 2;
+    for (let k = -2; k < 4; k++) ctx.strokeText('LIVE NOW • ', off + k * 900, y);
+  }
+  ctx.restore();
+
+  const cx = W / 2;
+  // LIVE badge
+  const pb = easeOutBack(prog(lt, .05, .5));
+  ctx.save(); ctx.translate(cx, 300); ctx.scale(pb, pb);
+  ctx.beginPath(); ctx.roundRect(-150, -42, 300, 84, 42);
+  ctx.fillStyle = brandGrad(-150, 150); ctx.shadowColor = C.mag; ctx.shadowBlur = 40; ctx.fill();
+  ctx.shadowBlur = 0;
+  const pulse = (lt * 1.5) % 1;
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(-88, 0, 13, 0, 6.283); ctx.fill();
+  ctx.strokeStyle = `rgba(255,255,255,${1 - pulse})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(-88, 0, 13 + pulse * 26, 0, 6.283); ctx.stroke();
+  text('LIVE', 20, 2, { size: 44, weight: 900, ls: 8 });
+  ctx.restore();
+
+  const gl = lt < .9 ? (hash(Math.floor(lt * 30)) * 14) : 0;
+  maskText('CAMPAIGN', cx, 500, prog(lt, .25, .9), { size: 210, weight: 900, ls: 6, glow: 40, glitch: gl });
+  const hw = measure('@RallyOnChain', 110, 900);
+  maskText('ON', cx + 70 - hw / 2 - 30, 705, prog(lt, .6, 1.2), { size: 70, weight: 300, ls: 10, align: 'right', color: 'rgba(255,255,255,.8)' });
+  maskText('@RallyOnChain', cx + 70, 700, prog(lt, .7, 1.3), { size: 110, weight: 900, gradient: true, glow: 30 });
+  // underline sweep
+  const pu = easeOutExpo(prog(lt, 1.1, 1.8));
+  ctx.save(); ctx.fillStyle = brandGrad(cx - 360, cx + 480); ctx.shadowColor = C.mag; ctx.shadowBlur = 20;
+  ctx.fillRect(cx - 360, 780, 840 * pu, 6); ctx.restore();
+  maskText('OPEN TO ANYONE WHO CREATES REAL CONTENT', cx, 880, prog(lt, 1.4, 2.1), { size: 34, weight: 600, ls: 8, color: 'rgba(255,255,255,.85)' });
+  zoomOut(lt, 3.4);
+}
+
+function scenePrize(t) {
+  const lt = t - 6.7, cx = W / 2, cy = H * .5;
+  const land = 2.0; // counter lands
+  const shake = lt > land ? Math.max(0, 1 - (lt - land) * 2.5) * 22 : 0;
+  ctx.save(); ctx.translate((hash(t * 91) - .5) * shake, (hash(t * 37) - .5) * shake);
+  rays(cx, cy, t, prog(lt, land, land + .3) * .9, 24, 1500);
+  maskText('TOTAL PRIZE POOL', cx, 250, prog(lt, .1, .7), { size: 44, weight: 700, ls: 24, color: C.pink });
+
+  const pc = prog(lt, .3, land);
+  ctx.translate(0, -30);
+  const val = Math.round(easeOutExpo(pc) * 100000 * (pc >= 1 ? 1 : .999999));
+  const shown = pc >= 1 ? 100000 : val;
+  const num = shown.toLocaleString('en-US');
+  const scale = lt > land ? 1 + .18 * Math.max(0, 1 - (lt - land) * 3) : lerp(.7, 1, easeOutCubic(pc));
+  ctx.save(); ctx.translate(cx, cy); ctx.scale(scale, scale);
+  ctx.globalAlpha = clamp(prog(lt, .3, .5));
+  text(num, 0, 0, { size: 270, weight: 900, glow: lt > land ? 70 : 25, gradient: lt > land, glitch: pc < 1 ? 6 : 0 });
+  ctx.restore();
+
+  const pg = easeOutElastic(prog(lt, land + .1, land + 1.1));
+  ctx.save(); ctx.translate(cx, cy + 250); ctx.scale(pg, pg);
+  ctx.beginPath(); ctx.roundRect(-150, -60, 300, 120, 24);
+  ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fill(); ctx.strokeStyle = C.pink; ctx.lineWidth = 3; ctx.stroke();
+  text('GLP', 0, 4, { size: 96, weight: 900, gradient: true, glow: 30 });
+  ctx.restore();
+  ctx.restore();
+
+  shock(cx, cy, prog(lt, land, land + 1), 1300, 30);
+  shock(cx, cy, prog(lt, land + .12, land + 1.2), 900, 12, '220,0,255');
+  burst(cx, cy, t, 6.7 + land, 11, 140, 1200);
+  flash(prog(lt, land, land + .35), '255,200,255');
+  zoomOut(lt, 4.1);
+}
+
+function sceneSteps(t) {
+  const lt = t - 10.8, cx = W / 2;
+  maskText("IT'S SIMPLE", cx, 175, prog(lt, 0, .6), { size: 92, weight: 900, ls: 8, glow: 30 });
+  maskText('3 STEPS · NO FARMING · REAL CONTENT', cx, 255, prog(lt, .25, .85), { size: 28, weight: 600, ls: 10, color: C.pink });
+  const steps = [
+    ['01', 'JOIN', 'the GenLayer campaign', 'on Rally'],
+    ['02', 'QUOTE', 'the campaign post', 'on X'],
+    ['03', 'SHARE', 'your own take', 'on GenLayer'],
+  ];
+  const cw = 500, ch = 520, gap = 60, x0 = cx - (cw * 3 + gap * 2) / 2, y0 = 340;
+  steps.forEach((s, i) => {
+    const st = .5 + i * .35;
+    const p = prog(lt, st, st + .8), e = easeOutBack(p);
+    if (p <= 0) return;
+    const active = prog(lt, 2.2 + i * .7, 2.5 + i * .7) * (1 - prog(lt, 2.9 + i * .7, 3.4 + i * .7));
+    const x = x0 + i * (cw + gap), y = y0 + (1 - e) * 300;
+    ctx.save();
+    ctx.translate(x + cw / 2, y + ch / 2); const sc = 1 + active * .05; ctx.scale(sc, sc); ctx.translate(-(x + cw / 2), -(y + ch / 2));
+    glassCard(x, y, cw, ch, clamp(p * 2), .4 + active);
+    // light sweep
+    const sw = prog(lt, st + .4, st + 1.2);
+    if (sw > 0 && sw < 1) {
+      ctx.save(); ctx.beginPath(); ctx.roundRect(x, y, cw, ch, 28); ctx.clip();
+      const sx = x - 200 + sw * (cw + 400);
+      const g = ctx.createLinearGradient(sx - 120, 0, sx + 120, 0);
+      g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(.5, 'rgba(255,200,255,.25)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g; ctx.fillRect(x, y, cw, ch); ctx.restore();
+    }
+    ctx.globalAlpha = clamp(p * 2);
+    text(s[0], x + 50, y + 110, { size: 120, weight: 900, align: 'left', gradient: true, glow: 20 });
+    ctx.fillStyle = brandGrad(x + 50, x + 250); ctx.fillRect(x + 50, y + 200, 90 + active * 120, 5);
+    text(s[1], x + 50, y + 300, { size: 92, weight: 900, align: 'left', ls: 4 });
+    text(s[2], x + 50, y + 395, { size: 36, weight: 500, align: 'left', color: 'rgba(255,255,255,.85)' });
+    text(s[3], x + 50, y + 445, { size: 36, weight: 700, align: 'left', color: C.pink });
+    ctx.restore();
+  });
+  zoomOut(lt, 5);
+}
+
+function sceneNoFarm(t) {
+  const lt = t - 15.8, cx = W / 2;
+  const lines = [['NO FARMING.', 300, 0], ['NO COPY-PASTE.', 480, .45]];
+  lines.forEach(([s, y, d]) => {
+    const p = prog(lt, d, d + .4);
+    const sl = prog(lt, d + .35, d + .65);
+    const fade = 1 - .55 * sl;
+    const gl = p < 1 ? hash(Math.floor(lt * 30) + d * 100) * 16 : 0;
+    ctx.save(); ctx.globalAlpha = fade;
+    maskText(s, cx, y, p, { size: 150, weight: 900, glitch: gl });
+    ctx.restore();
+    if (sl > 0) {
+      const w = measure(s, 150, 900) + 60;
+      ctx.save(); ctx.fillStyle = brandGrad(cx - w / 2, cx + w / 2); ctx.shadowColor = C.mag; ctx.shadowBlur = 30;
+      ctx.translate(cx - w / 2, y); ctx.rotate(-.03); ctx.fillRect(0, -7, w * easeOutExpo(sl), 14); ctx.restore();
+    }
+  });
+  const p3 = prog(lt, 1.2, 1.8);
+  maskText('JUST WHAT YOU', cx, 700, p3, { size: 64, weight: 400, ls: 12, color: 'rgba(255,255,255,.85)' });
+  maskText('ACTUALLY UNDERSTAND', cx, 820, prog(lt, 1.4, 2.0), { size: 120, weight: 900, gradient: true, glow: 40 });
+  zoomOut(lt, 2.8);
+}
+
+function sceneCallout(t) {
+  const lt = t - 18.6;
+  const ax = 560, ay = H / 2 - 20, r = 260;
+  const pa = easeOutBack(prog(lt, 0, .7));
+  // rotating rings
+  ctx.save(); ctx.translate(ax, ay); ctx.scale(pa, pa);
+  ctx.save(); ctx.rotate(lt * 1.2);
+  ctx.lineWidth = 10; ctx.strokeStyle = brandGrad(-r, r); ctx.shadowColor = C.mag; ctx.shadowBlur = 50;
+  ctx.setLineDash([140, 40]); ctx.beginPath(); ctx.arc(0, 0, r + 30, 0, 6.283); ctx.stroke();
+  ctx.restore();
+  ctx.save(); ctx.rotate(-lt * .8); ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,135,255,.6)';
+  ctx.setLineDash([8, 18]); ctx.beginPath(); ctx.arc(0, 0, r + 62, 0, 6.283); ctx.stroke(); ctx.restore();
+  ctx.save(); ctx.beginPath(); ctx.arc(0, 0, r, 0, 6.283); ctx.clip();
+  ctx.drawImage(imgs.pigeon, -r, -r, r * 2, r * 2);
+  ctx.restore();
+  ctx.restore();
+  // check badge
+  const pc = easeOutElastic(prog(lt, .7, 1.5));
+  ctx.save(); ctx.translate(ax + 200, ay + 200); ctx.scale(pc, pc);
+  ctx.beginPath(); ctx.arc(0, 0, 52, 0, 6.283); ctx.fillStyle = brandGrad(-52, 52); ctx.shadowColor = C.mag; ctx.shadowBlur = 30; ctx.fill();
+  ctx.shadowBlur = 0; ctx.strokeStyle = '#fff'; ctx.lineWidth = 10; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.moveTo(-20, 2); ctx.lineTo(-5, 18); ctx.lineTo(24, -16); ctx.stroke();
+  ctx.restore();
+
+  const tx = 980;
+  maskText('I ALREADY JOINED', tx, 300, prog(lt, .3, .9), { size: 58, weight: 700, ls: 8, align: 'left', color: 'rgba(255,255,255,.9)' });
+  maskText('& POSTED MINE.', tx, 375, prog(lt, .45, 1.05), { size: 58, weight: 700, ls: 8, align: 'left', color: C.pink });
+  // typewriter handle
+  const handle = '@MoStory8';
+  const n = Math.floor(clamp(prog(lt, 1.0, 1.6)) * handle.length);
+  const cur = (Math.floor(lt * 4) % 2 === 0 && lt < 2.6) ? '▍' : '';
+  text(handle.slice(0, n) + (n > 0 ? cur : ''), tx, 530, { size: 140, weight: 900, align: 'left', gradient: true, glow: 40 });
+  maskText("YOU'RE NEXT  →", tx, 680, prog(lt, 1.6, 2.1), { size: 96, weight: 900, align: 'left', ls: 4, glow: 25 });
+  maskText("YOU'D BE GOOD AT THIS — DON'T MISS IT", tx, 790, prog(lt, 1.9, 2.5), { size: 30, weight: 600, ls: 6, align: 'left', color: 'rgba(255,255,255,.75)' });
+  zoomOut(lt, 3.2);
+}
+
+function sceneOutro(t) {
+  const lt = t - 21.8, cx = W / 2;
+  rays(cx, 360, t, prog(lt, 0, .6) * .8, 20, 1300);
+  const p = easeOutBack(prog(lt, 0, .7));
+  // two logos side by side
+  const sz = 250;
+  ctx.save(); ctx.translate(cx - 220, 360); ctx.scale(p, p);
+  ctx.shadowColor = C.mag; ctx.shadowBlur = 60;
+  ctx.drawImage(imgs.logoGrad, -sz / 2, -sz / 2, sz, sz);
+  ctx.restore();
+  ctx.save(); ctx.translate(cx + 220, 360); ctx.scale(p, p);
+  ctx.lineWidth = 7; ctx.strokeStyle = brandGrad(-130, 130); ctx.shadowColor = C.mag; ctx.shadowBlur = 40;
+  ctx.beginPath(); ctx.arc(0, 0, 135, 0, 6.283); ctx.stroke(); ctx.shadowBlur = 0;
+  ctx.beginPath(); ctx.arc(0, 0, 128, 0, 6.283); ctx.clip();
+  ctx.drawImage(imgs.pigeon, -128, -128, 256, 256);
+  ctx.restore();
+  const px = easeOutBack(prog(lt, .3, .8));
+  ctx.save(); ctx.translate(cx, 360); ctx.scale(px, px); ctx.rotate((1 - px) * 3);
+  text('×', 0, -6, { size: 110, weight: 300, color: C.pink, glow: 20 }); ctx.restore();
+
+  maskText('JOIN THE CAMPAIGN', cx, 640, prog(lt, .5, 1.1), { size: 120, weight: 900, ls: 4, glow: 40 });
+  maskText('100,000 GLP PRIZE POOL', cx, 760, prog(lt, .75, 1.35), { size: 60, weight: 800, ls: 10, gradient: true, glow: 20 });
+  // CTA pill
+  const pp = easeOutBack(prog(lt, 1.1, 1.6));
+  ctx.save(); ctx.translate(cx, 880); ctx.scale(pp, pp);
+  const breathe = 1 + .03 * Math.sin(lt * 6);
+  ctx.scale(breathe, breathe);
+  ctx.beginPath(); ctx.roundRect(-260, -46, 520, 92, 46);
+  ctx.fillStyle = brandGrad(-260, 260); ctx.shadowColor = C.mag; ctx.shadowBlur = 50; ctx.fill();
+  text('@RallyOnChain', 0, 2, { size: 46, weight: 900 });
+  ctx.restore();
+  // fade out
+  ctx.save(); ctx.fillStyle = `rgba(7,0,15,${easeInOutCubic(prog(lt, 2.7, 3.2))})`; ctx.fillRect(0, 0, W, H); ctx.restore();
+}
+
+// exit transition: brief zoom + chroma at scene end
+let exitAmt = 0;
+function zoomOut(lt, dur) { exitAmt = Math.max(exitAmt, easeInExpo(prog(lt, dur - .3, dur))); }
+
+// ---------- main render ----------
+const sceneCanvas = document.createElement('canvas'); sceneCanvas.width = W; sceneCanvas.height = H;
+function render(t) {
+  const energy = t > 8.7 && t < 10.8 ? 1 : t > 3.3 ? .4 : .15;
+  background(t, energy);
+
+  const cur = S.find(s => t >= s[0] && t < s[1]) || S[S.length - 1];
+  exitAmt = 0;
+  // draw scene onto main ctx, then apply exit warp using a snapshot
+  ctx.save();
+  // entry punch
+  const ent = 1 - easeOutExpo(prog(t, cur[0], cur[0] + .35));
+  if (cur[0] > 0) { const s = 1 + ent * .25; ctx.translate(W / 2, H / 2); ctx.scale(s, s); ctx.translate(-W / 2, -H / 2); ctx.globalAlpha = 1 - ent * .6; }
+  cur[2](t);
+  ctx.restore();
+
+  if (exitAmt > 0 && cur !== S[S.length - 1]) {
+    const sc = sceneCanvas.getContext('2d');
+    sc.clearRect(0, 0, W, H); sc.drawImage(cv, 0, 0);
+    ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = exitAmt * .6;
+    const z = 1 + exitAmt * .35;
+    ctx.translate(W / 2, H / 2); ctx.scale(z, z); ctx.translate(-W / 2, -H / 2);
+    ctx.drawImage(sceneCanvas, -exitAmt * 30, 0);
+    ctx.drawImage(sceneCanvas, exitAmt * 30, 0);
+    ctx.restore();
+    ctx.save(); ctx.fillStyle = `rgba(255,200,255,${exitAmt * .8})`; ctx.fillRect(0, 0, W, H); ctx.restore();
+  }
+  // cut flash at scene start
+  if (cur[0] > 0) flash(prog(t, cur[0], cur[0] + .25), '255,170,255');
+
+  hud(t);
+  vignette();
+  scanlines(t);
+}
+
+window.ready = (async () => {
+  await Promise.all([load('logo', 'assets/genlayer.png'), load('pigeon', 'assets/pigeon.jpg')]);
+  await document.fonts.load(`900 100px Inter`); await document.fonts.load(`300 100px Inter`);
+  imgs.logoWhite = tinted(imgs.logo, '#ffffff');
+  imgs.logoPink = tinted(imgs.logo, C.pink);
+  imgs.logoPurple = tinted(imgs.logo, C.purple);
+  imgs.logoGrad = tinted(imgs.logo, (x, c) => { const g = x.createLinearGradient(0, 0, c.width, c.height); g.addColorStop(0, '#ffffff'); g.addColorStop(.35, C.pink); g.addColorStop(.75, C.mag); g.addColorStop(1, C.purple); return g; });
+  window.render = render;
+  if (!location.search.includes('capture')) {
+    const start = performance.now();
+    const loop = () => { render(((performance.now() - start) / 1000) % DURATION); requestAnimationFrame(loop); };
+    loop();
+  }
+})();
+</script>
+</body>
+</html>
